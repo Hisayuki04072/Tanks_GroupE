@@ -1,4 +1,5 @@
-﻿using UnityEngine;
+﻿using System;
+using UnityEngine;
 using UnityEngine.UI;
 
 namespace Complete
@@ -8,6 +9,7 @@ namespace Complete
         public int m_PlayerNumber = 1;              // Used to identify the different players.
         public Rigidbody m_Shell;                   // Prefab of the shell.
         public Transform m_FireTransform;           // A child of the tank where the shells are spawned.
+        public Transform turret;                     // 砲塔のTransform
         public Slider m_AimSlider;                  // A child of the tank that displays the current launch force.
         public AudioSource m_ShootingAudio;         // Reference to the audio source used to play the shooting audio. NB: different to the movement audio source.
         public AudioClip m_ChargingClip;            // Audio that plays when each shot is charging up.
@@ -16,12 +18,66 @@ namespace Complete
         public float m_MaxLaunchForce = 30f;        // The force given to the shell if the fire button is held for the max charge time.
         public float m_MaxChargeTime = 0.75f;       // How long the shell can charge for before it is fired at max force.
 
-
         private string m_FireButton;                // The input axis that is used for launching shells.
         private float m_CurrentLaunchForce;         // The force that will be given to the shell when the fire button is released.
         private float m_ChargeSpeed;                // How fast the launch force increases, based on the max charge time.
         private bool m_Fired;                       // Whether or not the shell has been launched with this button press.
 
+
+        public int Bullets_start_hold = 10;         //1-3追加
+        private int m_Bullets_hold;
+        private int m_Bullets_max_hold = 50;
+        private int m_Bullets_supply = 10;
+
+        public event Action<int, WeaponStockData> OnShellStockChanged;   //TankManagerがリスナー
+
+        private bool isIncreasing = true;
+
+        private WeaponStockData mineStock = new WeaponStockData(0, 3, 1);
+        [SerializeField] private GameObject minePrefab;
+        private string putMineButton;
+
+        private void OnCollisionEnter(Collision collision)
+        {
+            if (collision.gameObject.CompareTag("ShellCartridge"))
+            {
+                Add_Bullets();
+                Destroy(collision.gameObject);
+            }
+            if (collision.gameObject.CompareTag("MineCartridge"))
+            {
+                mineStock.AddStock(mineStock.StockInCartridge);
+                Destroy(collision.gameObject);
+            }
+            OnShellStockChanged?.Invoke(m_Bullets_hold, mineStock);
+        }
+        private void Add_Bullets()
+        {
+            if (m_Bullets_hold + m_Bullets_supply < m_Bullets_max_hold)
+            {
+                m_Bullets_hold += m_Bullets_supply;
+            }
+            else
+            {
+                m_Bullets_hold = m_Bullets_max_hold;
+            }
+        }
+        private void Awake()
+        {
+            // 子オブジェクトから砲塔を探してアサイン
+            if (turret == null)
+            {
+                Transform turretTransform = transform.Find("TankRenderers/TankTurret"); // 子オブジェクトのパスを指定
+                if (turretTransform != null)
+                {
+                    turret = turretTransform;
+                }
+                else
+                {
+                    Debug.LogError("Turret not found. Please assign the turret in the inspector or check the object name.");
+                }
+            }
+        }
 
         private void OnEnable()
         {
@@ -30,75 +86,120 @@ namespace Complete
             m_AimSlider.value = m_MinLaunchForce;
         }
 
-
-        private void Start ()
+        private void Start()
         {
+            m_Bullets_hold = Bullets_start_hold;
             // The fire axis is based on the player number.
             m_FireButton = "Fire" + m_PlayerNumber;
+            putMineButton = "PutMine" + m_PlayerNumber;
 
             // The rate that the launch force charges up is the range of possible forces by the max charge time.
             m_ChargeSpeed = (m_MaxLaunchForce - m_MinLaunchForce) / m_MaxChargeTime;
         }
 
-
-        private void Update ()
+        private void Update()
         {
+            // 矢印が車体の根元から伸びるように、車体の位置を基準にして矢印の位置を調整
+            Vector3 aimSliderPosition = turret.position + turret.forward * 6.0f; // 砲塔の前方に少し伸ばす
+            m_AimSlider.transform.position = aimSliderPosition + turret.up * 0.5f; // 砲塔の高さに合わせる
+            // 矢印が砲塔の方向を向くように回転を砲塔に合わせる
+            m_AimSlider.transform.rotation = turret.rotation * Quaternion.Euler(90, 0, 0);  // 砲塔の回転に合わせて矢印を表示
+
             // The slider should have a default value of the minimum launch force.
-            m_AimSlider.value = m_MinLaunchForce;
-
-            // If the max force has been exceeded and the shell hasn't yet been launched...
-            if (m_CurrentLaunchForce >= m_MaxLaunchForce && !m_Fired)
+            //m_AimSlider.value = m_MinLaunchForce;
+            if (m_Bullets_hold > 0)
             {
-                // ... use the max force and launch the shell.
-                m_CurrentLaunchForce = m_MaxLaunchForce;
-                Fire ();
+                if (Input.GetButtonDown(m_FireButton))
+                {
+                    m_Fired = false;
+                    m_CurrentLaunchForce = m_MinLaunchForce;//ボタンが押された時は最小値を与える
+                    m_ShootingAudio.clip = m_ChargingClip;
+                    m_ShootingAudio.Play();
+                    isIncreasing = true;
+                }
+                else if (Input.GetButton(m_FireButton) && !m_Fired)
+                {
+                    if (isIncreasing == true)
+                    {
+                        m_CurrentLaunchForce += m_ChargeSpeed * Time.deltaTime;//押されている最中は力も大きくなる
+                        if (m_CurrentLaunchForce >= m_MaxLaunchForce)
+                        {
+                            m_CurrentLaunchForce = m_MaxLaunchForce;
+                            isIncreasing = false;
+                        }
+                    }
+                    else if (isIncreasing == false)
+                    {
+                        m_CurrentLaunchForce -= m_ChargeSpeed * Time.deltaTime;
+                        if (m_CurrentLaunchForce <= m_MinLaunchForce)
+                        {
+                            m_CurrentLaunchForce = m_MinLaunchForce;
+                            isIncreasing = true;
+                        }
+                    }
+                    m_AimSlider.value = m_CurrentLaunchForce;
+                }
+                else if (Input.GetButtonUp(m_FireButton) && !m_Fired)
+                {
+                    Fire();
+                    m_AimSlider.value = m_MinLaunchForce;
+                }
             }
-            // Otherwise, if the fire button has just started being pressed...
-            else if (Input.GetButtonDown (m_FireButton))
+            /*
+            if (m_Bullets_hold > 0)//砲弾の所有数をデバック
             {
-                // ... reset the fired flag and reset the launch force.
-                m_Fired = false;
-                m_CurrentLaunchForce = m_MinLaunchForce;
-
-                // Change the clip to the charging clip and start it playing.
-                m_ShootingAudio.clip = m_ChargingClip;
-                m_ShootingAudio.Play ();
+                Debug.Log(m_Bullets_hold);
             }
-            // Otherwise, if the fire button is being held and the shell hasn't been launched yet...
-            else if (Input.GetButton (m_FireButton) && !m_Fired)
+            else
             {
-                // Increment the launch force and update the slider.
-                m_CurrentLaunchForce += m_ChargeSpeed * Time.deltaTime;
-
-                m_AimSlider.value = m_CurrentLaunchForce;
+                Debug.Log("砲弾なし");
             }
-            // Otherwise, if the fire button is released and the shell hasn't been launched yet...
-            else if (Input.GetButtonUp (m_FireButton) && !m_Fired)
+            */
+            if (Input.GetButtonDown(putMineButton))
             {
-                // ... launch the shell.
-                Fire ();
+                PutMine();
             }
         }
 
-
-        private void Fire ()
+        public void Fire()
         {
-            // Set the fired flag so only Fire is only called once.
+            if (gameObject.GetComponent<TankHealth>().IsInvincible)
+            {
+                return;
+            }
             m_Fired = true;
+            m_Bullets_hold -= 1;
+            OnShellStockChanged?.Invoke(m_Bullets_hold, mineStock);
+            // Debugging to check for null references
+            if (m_Shell == null) Debug.LogError("Shell is null");
+            if (m_FireTransform == null) Debug.LogError("FireTransform is null");
+            if (turret == null) Debug.LogError("Turret is null");
+            // 砲弾の発射位置をturretの位置と回転を基準に設定
+            //Vector3 firePosition = turret.position + turret.forward * 0.85f;
+            Vector3 firePosition = m_FireTransform.position + new Vector3(0, 0.85f, 0); // y方向に少し上に
+            Rigidbody shellInstance = Instantiate(m_Shell, firePosition, turret.rotation) as Rigidbody;
 
-            // Create an instance of the shell and store a reference to it's rigidbody.
-            Rigidbody shellInstance =
-                Instantiate (m_Shell, m_FireTransform.position, m_FireTransform.rotation) as Rigidbody;
+            shellInstance.velocity = m_CurrentLaunchForce * turret.forward;
 
-            // Set the shell's velocity to the launch force in the fire position's forward direction.
-            shellInstance.velocity = m_CurrentLaunchForce * m_FireTransform.forward; 
-
-            // Change the clip to the firing clip and play it.
             m_ShootingAudio.clip = m_FireClip;
-            m_ShootingAudio.Play ();
+            m_ShootingAudio.Play();
 
-            // Reset the launch force.  This is a precaution in case of missing button events.
             m_CurrentLaunchForce = m_MinLaunchForce;
+        }
+
+        private void PutMine()
+        {
+            if (gameObject.GetComponent<TankHealth>().IsInvincible)
+            {
+                return;
+            }
+            if (mineStock.CurrentStock > 0)
+            {
+                mineStock.ConsumeStock(1);
+                OnShellStockChanged?.Invoke(m_Bullets_hold, mineStock);
+                Vector3 minePosition = gameObject.transform.position + turret.forward * 1.5f;
+                Instantiate(minePrefab, minePosition, turret.rotation);
+            }
         }
     }
 }
